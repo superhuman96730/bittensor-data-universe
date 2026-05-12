@@ -122,7 +122,7 @@ class RedditJsonScraper(Scraper):
         )
 
         # Get the search parameters
-        limit = min(scrape_config.entity_limit, 100)  # Reddit API max is 100
+        limit = min(scrape_config.entity_limit or 100, 100)  # Reddit API max is 100
         sort = self._get_sort_for_date_range(scrape_config.date_range.end)
 
         contents = []
@@ -202,6 +202,9 @@ class RedditJsonScraper(Scraper):
         )
 
         contents = []
+        contentsAll = []
+        after = None
+        url = None
         limit = min(limit, 100)  # Reddit API max is 100
 
         try:
@@ -209,11 +212,12 @@ class RedditJsonScraper(Scraper):
 
                 # Case 1: Search by usernames
                 if usernames:
+                    bt.logging.warning(f"----------mode usernames filtering")
                     for username in usernames:
                         try:
                             # Get user's posts
                             # raw_json=1 returns unescaped text to match PRAW output
-                            posts_url = f"{self.BASE_URL}/user/{username}/submitted.json?limit={limit}&raw_json=1"
+                            posts_url = f"{self.BASE_URL}/user/{username}/submitted.json?limit=100&raw_json=1"
                             posts = await self._fetch_posts(session, posts_url)
 
                             for post_data in posts:
@@ -222,9 +226,9 @@ class RedditJsonScraper(Scraper):
                                     contents.append(content)
 
                             # Get user's comments
-                            comments_url = f"{self.BASE_URL}/user/{username}/comments.json?limit={limit}&raw_json=1"
+                            comments_url = f"{self.BASE_URL}/user/{username}/comments.json?limit=100&raw_json=1"
                             comments = await self._fetch_posts(session, comments_url)
-
+                            bt.logging.warning(f"---------- {comments_url}")
                             for comment_data in comments:
                                 content = self._parse_comment(comment_data)
                                 if content and self._matches_criteria(content, keywords, keyword_mode, start_datetime, end_datetime):
@@ -234,7 +238,8 @@ class RedditJsonScraper(Scraper):
                             continue
 
                 # Case 2: Search by subreddit (with optional keywords)
-                else:
+                elif subreddit:
+                    bt.logging.warning(f"----------mode subreddit filtering")
                     subreddit_name = subreddit.removeprefix("r/") if subreddit.startswith('r/') else subreddit
 
                     # If we have keywords, use Reddit's search functionality
@@ -245,13 +250,14 @@ class RedditJsonScraper(Scraper):
                         else:  # keyword_mode == "any"
                             search_query = ' OR '.join(f'"{keyword}"' for keyword in keywords)
 
-                        url = f"{self.BASE_URL}/r/{subreddit_name}/search.json?q={search_query}&restrict_sr=1&limit={limit}&sort=new&raw_json=1"
+                        url = f"{self.BASE_URL}/r/{subreddit_name}/search.json?q={search_query}&restrict_sr=1&limit=100&sort=new&raw_json=1"
                     else:
                         # No keywords, just get recent posts
-                        url = f"{self.BASE_URL}/r/{subreddit_name}/new.json?limit={limit}&raw_json=1"
-
+                        url = f"{self.BASE_URL}/r/{subreddit_name}/new.json?limit=100&raw_json=1"
+                    bt.logging.warning(f"---------- {url}")
                     posts = await self._fetch_posts(session, url)
-
+                    if len(posts) != 0:
+                        after = posts[-1]["data"]["name"]
                     for post_data in posts:
                         # Check if it's a post or comment based on kind
                         kind = post_data.get("kind", "")
@@ -262,33 +268,113 @@ class RedditJsonScraper(Scraper):
                         else:
                             content = self._parse_post(post_data)  # Default to post parsing
 
+                        contentsAll.append(content)
+                        if content and self._matches_criteria(content, keywords, keyword_mode, start_datetime, end_datetime):
+                            contents.append(content)
+                # Case 3: Search by keywords (without subreddit)
+                else:
+                    bt.logging.warning(f"----------mode keywords filtering")
+                    if keywords:
+                        if keyword_mode == "all":
+                            search_query = ' AND '.join(f'"{keyword}"' for keyword in keywords)
+                        else:  # keyword_mode == "any"
+                            search_query = ' OR '.join(f'"{keyword}"' for keyword in keywords)
+
+                        url = f"{self.BASE_URL}/search.json?q={search_query}&restrict_sr=0&limit=100&sort=new&raw_json=1"
+                    else:
+                        # No keywords, just get recent posts
+                        url = f"{self.BASE_URL}/new.json?limit=100&raw_json=1"
+                    bt.logging.warning(f"---------- {url}")
+                    posts = await self._fetch_posts(session, url)
+                    if len(posts) != 0:
+                        after = posts[-1]["data"]["name"]
+                    for post_data in posts:
+                        # Check if it's a post or comment based on kind
+                        kind = post_data.get("kind", "")
+                        if kind == "t3":  # Post
+                            content = self._parse_post(post_data)
+                        elif kind == "t1":  # Comment
+                            content = self._parse_comment(post_data)
+                        else:
+                            content = self._parse_post(post_data)  # Default to post parsing
+
+                        contentsAll.append(content)
                         if content and self._matches_criteria(content, keywords, keyword_mode, start_datetime, end_datetime):
                             contents.append(content)
 
+                # Filter out NSFW content with media
+                filtered_contents = []
+                for content in contents:
+                    if content.is_nsfw and content.media:
+                        bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                        continue
+                    filtered_contents.append(content)
+
+                if len(filtered_contents) < limit and len(contentsAll) > 0 and after is not None:
+                    flag = True
+                    while flag:
+                        
+                        nextUrl = url + "&after=" + after if after else url
+                        bt.logging.warning(f"----------next page filtering: + {nextUrl}")
+                        bt.logging.warning(f"----------len(filtered_contents) : + {len(filtered_contents)}")
+                        posts = await self._fetch_posts(session, nextUrl)
+                        if not posts:
+                            break
+                        
+                        for post in posts:
+                            
+                            kind = post.get("kind", "")
+                            if kind == "t3":  # Post
+                                content = self._parse_post(post)
+                            elif kind == "t1":  # Comment
+                                content = self._parse_comment(post)
+                            else:
+                                content = self._parse_post(post)  # Default to post parsing
+
+                            if content is None:
+                                continue
+                            
+                            t = content.created_at
+                            # bt.logging.warning(f"----------next page filtering---t: + {t}")
+                            # bt.logging.warning(f"----------next page filtering---start_datetime: + {start_datetime}")
+                            # cutoff condition
+                            if t < start_datetime:
+                                flag = False
+                                break
+                            
+                            if start_datetime <= t <= end_datetime:
+                                if content.is_nsfw and content.media:
+                                    bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                                    continue
+                                filtered_contents.append(content)
+
+                            if len(filtered_contents) >= limit:
+                                flag = False
+                                break
+
+                        # pagination
+                        after = posts[-1]["data"]["name"]
+
+                # if len(filtered_contents) == 0 and len(contentsAll) > 0:
+                #     # contentsAll.sort(key=lambda c: c.created_at if c else dt.datetime.min, reverse=True)
+                #     if (not contentsAll[0].is_nsfw) and (not contentsAll[0].media):
+                #             filtered_contents = contentsAll[:1]
+
+                bt.logging.success(
+                    f"On-demand scrape completed. Found {len(filtered_contents)} items "
+                    f"(filtered out {len(contents) - len(filtered_contents)} NSFW+media posts)."
+                )
+
+                # Convert to DataEntity objects
+                data_entities = []
+                for content in filtered_contents:
+                    data_entities.append(RedditContent.to_data_entity(content=content))
+
+                return data_entities
         except Exception as e:
             bt.logging.error(f"Failed to perform on-demand scrape: {e}")
             bt.logging.error(traceback.format_exc())
             return []
-
-        # Filter out NSFW content with media
-        filtered_contents = []
-        for content in contents:
-            if content.is_nsfw and content.media:
-                bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
-                continue
-            filtered_contents.append(content)
-
-        bt.logging.success(
-            f"On-demand scrape completed. Found {len(filtered_contents)} items "
-            f"(filtered out {len(contents) - len(filtered_contents)} NSFW+media posts)."
-        )
-
-        # Convert to DataEntity objects
-        data_entities = []
-        for content in filtered_contents:
-            data_entities.append(RedditContent.to_data_entity(content=content))
-
-        return data_entities
 
     async def _fetch_posts(self, session: aiohttp.ClientSession, url: str) -> List[dict]:
         """

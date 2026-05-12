@@ -110,6 +110,11 @@ class OnDemandRequest(BaseProtocol):
         description="Usernames to fetch data from",
         max_length=10
     )
+    
+    subreddit: Optional[str] = Field(
+        default=None,
+        description="Single subreddit for subreddit search mode (Reddit only)"
+    )
 
     keywords: List[str] = Field(
         default_factory=list,

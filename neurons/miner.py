@@ -19,6 +19,7 @@ import asyncio
 from collections import defaultdict
 import contextlib
 import copy
+import http
 import sys
 import threading
 import time
@@ -62,6 +63,7 @@ from scraping.reddit.reddit_json_scraper import RedditJsonScraper
 import json
 
 from vali_utils.on_demand.output_models import create_organic_output_dict
+import httpx
 
 # Enable logging to the miner TODO move it to some different location
 bt.logging.set_info(True)
@@ -81,7 +83,7 @@ class Miner:
         self.use_gravity_retrieval = self.config.gravity
 
         # The wallet holds the cryptographic key pairs for the miner.
-        self.wallet = bt.wallet(config=self.config)
+        self.wallet = bt.Wallet(config=self.config)
         bt.logging.info(f"Wallet: {self.wallet}.")
 
         if self.config.offline:
@@ -92,7 +94,7 @@ class Miner:
             self.uid = 0  # Offline mode so assume it's == 0
         else:
             # The subtensor is our connection to the Bittensor blockchain.
-            self.subtensor = bt.subtensor(config=self.config)
+            self.subtensor = bt.Subtensor(config=self.config)
             bt.logging.info(f"Subtensor: {self.subtensor}.")
 
             # The metagraph holds the state of the network, letting us know about other validators and miners.
@@ -116,7 +118,7 @@ class Miner:
             self.step = 0
 
             # The axon handles request processing, allowing validators to send this miner requests.
-            self.axon = bt.axon(wallet=self.wallet, port=self.config.axon.port)
+            self.axon = bt.Axon(wallet=self.wallet, port=self.config.axon.port)
 
             # Attach determiners which functions are called when servicing a request.
             bt.logging.info("Attaching forward function to miner axon.")
@@ -446,6 +448,7 @@ class Miner:
             # map job request to existing synapse on demand
             usernames: typing.Optional[typing.List[str]] = []
             keywords: typing.Optional[typing.List[str]] = []
+            subreddit: typing.Optional[str] = None
             url: typing.Optional[str] = None
 
             data_source: DataSource
@@ -460,12 +463,13 @@ class Miner:
                 data_source = DataSource.REDDIT
                 rd_job: OnDemandJobPayloadReddit = job_request.job
                 usernames = rd_job.usernames
+                subreddit = rd_job.subreddit
+                keywords = rd_job.keywords
+                # if rd_job.subreddit:
+                #     keywords = [rd_job.subreddit]
 
-                if rd_job.subreddit:
-                    keywords = [rd_job.subreddit]
-
-                if rd_job.keywords:
-                    keywords.extend(rd_job.keywords)
+                # if rd_job.keywords:
+                #     keywords.extend(rd_job.keywords)
 
             # process
             synapse_resp = await self.loop_poll_on_demand_active_jobs(
@@ -484,6 +488,7 @@ class Miner:
                     ),
                     keyword_mode=job_request.keyword_mode,
                     usernames=usernames if usernames is not None else [],
+                    subreddit=subreddit,
                     keywords=keywords if keywords is not None else [],
                     url=url,
                     data=[],
@@ -509,15 +514,71 @@ class Miner:
             bt.logging.info(
                 f"Submitting and uploading data for job with id: {job_request.id}"
             )
-            try:
-                async with self._on_demand_client() as client:
-                    await client.miner_submit_and_upload(
-                        job_id=job_request.id, data=miner_upload
+            # try:
+            #     async with self._on_demand_client() as client:
+            #         await client.miner_submit_and_upload(
+            #             job_id=job_request.id, data=miner_upload
+            #         )
+            # except:
+            #     bt.logging.exception(
+            #         f"Failed to submit and upload data for job with {job_request.id}"
+            #     )
+            max_retries = 5
+            retry_delay = 5
+
+            for attempt in range(max_retries):
+
+                try:
+                    async with self._on_demand_client() as client:
+                        await client.miner_submit_and_upload(
+                            job_id=job_request.id, data=miner_upload
+                        )
+
+                        bt.logging.success(
+                            "Submit successful"
+                        )
+
+                        break
+
+                except httpx.HTTPStatusError as e:
+
+                    status = e.response.status_code
+
+                    if status == 409:
+
+                        bt.logging.warning(
+                            f"Job {job_request.id} already submitted."
+                        )
+
+                        # already submitted, no need to retry, just
+                        return
+                    
+                    if status in [502, 503, 504]:
+
+                        bt.logging.warning(
+                            f"Server temporary error {status}. "
+                            f"Retry {attempt+1}/{max_retries}"
+                        )
+
+                        await asyncio.sleep(retry_delay)
+
+                        retry_delay *= 2
+
+                        continue
+
+                    raise
+
+                except httpx.ConnectError:
+
+                    bt.logging.warning(
+                        "Connection failed. Retrying..."
                     )
-            except:
-                bt.logging.exception(
-                    f"Failed to submit and upload data for job with {job_request.id}"
-                )
+
+                    await asyncio.sleep(retry_delay)
+
+                    retry_delay *= 2
+
+                    continue
         except:
             bt.logging.exception("Failed to process scrape on demand job")
 
@@ -732,6 +793,29 @@ class Miner:
                     limit=synapse.limit,
                 )
 
+                # if len(data_entities) == 0:
+                #     bt.logging.info(
+                #         f"Scraper returned no data for X request from {synapse.dendrite.hotkey}. Instead of returning X, return reddit data."
+                #     )
+                #     if synapse.keywords is None or len(synapse.keywords) == 0:
+                #         synapse.data = []
+                #         return synapse
+                #     # Fallback to Reddit data
+                #     scraper = RedditJsonScraper()
+                #     data = await scraper.on_demand_scrape(
+                #         usernames=synapse.usernames,
+                #         subreddit=synapse.keywords[0] if synapse.keywords else None,
+                #         keywords=(
+                #             synapse.keywords[1:] if len(synapse.keywords) > 1 else None
+                #         ),
+                #         keyword_mode=synapse.keyword_mode,
+                #         start_datetime=start_dt,
+                #         end_datetime=end_dt,
+                #         limit=synapse.limit,
+                #     )
+                #     synapse.data = data[: synapse.limit] if synapse.limit else data
+                # else:
+
                 # Update response with data entities (already includes all enhanced fields)
                 synapse.data = (
                     data_entities[: synapse.limit] if synapse.limit else data_entities
@@ -751,10 +835,8 @@ class Miner:
 
                 data = await scraper.on_demand_scrape(
                     usernames=synapse.usernames,
-                    subreddit=synapse.keywords[0] if synapse.keywords else None,
-                    keywords=(
-                        synapse.keywords[1:] if len(synapse.keywords) > 1 else None
-                    ),
+                    subreddit=synapse.subreddit,
+                    keywords=synapse.keywords,
                     keyword_mode=synapse.keyword_mode,
                     start_datetime=start_dt,
                     end_datetime=end_dt,
@@ -885,7 +967,7 @@ class Miner:
         )
         return priority
 
-    def get_config_for_test(self) -> bt.config:
+    def get_config_for_test(self) -> bt.Config:
         return self.config
 
     def sync(self):
