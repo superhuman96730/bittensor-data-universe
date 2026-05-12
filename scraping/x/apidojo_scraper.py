@@ -1,8 +1,12 @@
 import asyncio
 import threading
 import traceback
+import os
+import json
+import re
 import bittensor as bt
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
+from urllib.parse import quote_plus
 from common.data import DataEntity, DataLabel, DataSource
 from common.protocol import KeywordMode
 from common.date_range import DateRange
@@ -21,6 +25,7 @@ class ApiDojoTwitterScraper(Scraper):
     ACTOR_ID = "61RPP7dywgiy0JPD0"
 
     SCRAPE_TIMEOUT_SECS = 120
+    PLAYWRIGHT_TIMEOUT_MS = 45000
 
     BASE_RUN_INPUT = {"maxRequestRetries": 5}
 
@@ -186,39 +191,11 @@ class ApiDojoTwitterScraper(Scraper):
         # Join all parts with spaces
         query = " ".join(query_parts)
 
-        # Construct the input to the runner.
-        max_items = scrape_config.entity_limit or 150
-        run_input = {
-            **ApiDojoTwitterScraper.BASE_RUN_INPUT,
-            "searchTerms": [query],
-            "maxTweets": max_items,
-        }
-
-        run_config = RunConfig(
-            actor_id=ApiDojoTwitterScraper.ACTOR_ID,
-            debug_info=f"Scrape {query}",
-            max_data_entities=scrape_config.entity_limit,
-            timeout_secs=ApiDojoTwitterScraper.SCRAPE_TIMEOUT_SECS,
-        )
-
         bt.logging.success(f"Performing Twitter scrape for search terms: {query}.")
-
-        # Run the Actor and retrieve the scraped data.
-        dataset: List[dict] = None
-        try:
-            dataset: List[dict] = await self.runner.run(run_config, run_input)
-        except Exception:
-            bt.logging.error(
-                f"Failed to scrape tweets using search terms {query}: {traceback.format_exc()}."
-            )
-            return []
-
-        # Return the parsed results, optionally disabling engagement filtering
-        check_engagement = (
-            not allow_low_engagement
-        )  # Disable filtering if allow_low_engagement=True
-        x_contents, is_retweets, _, _ = self._best_effort_parse_dataset(
-            dataset=dataset, check_engagement=check_engagement
+        x_contents = await self._scrape_query_playwright(
+            query=query,
+            max_items=scrape_config.entity_limit or 150,
+            check_engagement=not allow_low_engagement,
         )
 
         bt.logging.success(
@@ -266,30 +243,8 @@ class ApiDojoTwitterScraper(Scraper):
                 bt.logging.error(f"Invalid Twitter URL: {url}")
                 return []
 
-            # Use startUrls approach similar to validation method
-            run_input = {
-                **ApiDojoTwitterScraper.BASE_RUN_INPUT,
-                "startUrls": [url],
-                "maxItems": limit,
-            }
-            run_config = RunConfig(
-                actor_id=ApiDojoTwitterScraper.ACTOR_ID,
-                debug_info=f"On-demand scrape URL {url}",
-                max_data_entities=limit,
-                timeout_secs=ApiDojoTwitterScraper.SCRAPE_TIMEOUT_SECS,
-            )
-
             bt.logging.success(f"Performing on-demand Twitter scrape for URL: {url}")
-
-            # Run the Actor and retrieve the scraped data
-            try:
-                dataset: List[dict] = await self.runner.run(run_config, run_input)
-            except Exception as e:
-                bt.logging.exception(f"Failed to scrape tweet from URL {url}: {str(e)}")
-                return []
-
-            # Parse the results - ALLOW LOW ENGAGEMENT POSTS
-            x_contents, _, _, _ = self._best_effort_parse_dataset(dataset=dataset, check_engagement=False)
+            x_contents = await self._scrape_url_playwright(url=url, max_items=limit)
 
             bt.logging.success(
                 f"Completed on-demand scrape for URL {url}. Scraped {len(x_contents)} items."
@@ -341,31 +296,12 @@ class ApiDojoTwitterScraper(Scraper):
         
         query = " ".join(query_parts)
         
-        # Construct the input to the runner
-        run_input = {
-            **ApiDojoTwitterScraper.BASE_RUN_INPUT,
-            "searchTerms": [query],
-            "maxTweets": limit,
-        }
-
-        run_config = RunConfig(
-            actor_id=ApiDojoTwitterScraper.ACTOR_ID,
-            debug_info=f"On-demand scrape {query}",
-            max_data_entities=limit,
-            timeout_secs=ApiDojoTwitterScraper.SCRAPE_TIMEOUT_SECS,
-        )
-
         bt.logging.success(f"Performing on-demand Twitter scrape for: {query}")
-
-        # Run the Actor and retrieve the scraped data
-        try:
-            dataset: List[dict] = await self.runner.run(run_config, run_input)
-        except Exception as e:
-            bt.logging.exception(f"Failed to scrape tweets using query {query}: {str(e)}")
-            return []
-
-        # Parse the results using enhanced methods - ALLOW LOW ENGAGEMENT POSTS
-        x_contents, _, _, _ = self._best_effort_parse_dataset(dataset=dataset, check_engagement=False)
+        x_contents = await self._scrape_query_playwright(
+            query=query,
+            max_items=limit,
+            check_engagement=False,
+        )
 
         bt.logging.success(
             f"Completed on-demand scrape for {query}. Scraped {len(x_contents)} items."
@@ -377,6 +313,186 @@ class ApiDojoTwitterScraper(Scraper):
             data_entities.append(XContent.to_data_entity(content=x_content))
 
         return data_entities
+
+    async def _scrape_url_playwright(self, url: str, max_items: int) -> List[XContent]:
+        return await self._scrape_with_playwright(url=url, max_items=max_items)
+
+    async def _scrape_query_playwright(
+        self, query: str, max_items: int, check_engagement: bool
+    ) -> List[XContent]:
+        search_url = f"https://x.com/search?q={quote_plus(query)}&f=live"
+        tweets = await self._scrape_with_playwright(url=search_url, max_items=max_items)
+        if check_engagement:
+            tweets = [t for t in tweets if not utils.is_low_engagement_tweet({"viewCount": t.view_count or 0})]
+        return tweets
+
+    def _normalize_cookie_editor_export(self, cookies: List[dict]) -> List[dict]:
+        normalized = []
+        for cookie in cookies:
+            if not isinstance(cookie, dict):
+                continue
+
+            name = cookie.get("name")
+            value = cookie.get("value")
+            if not name or value is None:
+                continue
+
+            domain = cookie.get("domain")
+            path = cookie.get("path") or "/"
+
+            # Cookie-Editor often exports hostOnly/domain without scheme.
+            # Playwright accepts domain+path or url.
+            out = {
+                "name": name,
+                "value": str(value),
+                "path": path,
+            }
+
+            if domain:
+                out["domain"] = domain
+            elif cookie.get("url"):
+                out["url"] = cookie["url"]
+
+            if "expires" in cookie and isinstance(cookie["expires"], (int, float)):
+                out["expires"] = cookie["expires"]
+            if "httpOnly" in cookie:
+                out["httpOnly"] = bool(cookie["httpOnly"])
+            if "secure" in cookie:
+                out["secure"] = bool(cookie["secure"])
+
+            same_site = cookie.get("sameSite")
+            if isinstance(same_site, str):
+                ss = same_site.strip().capitalize()
+                if ss in {"Lax", "None", "Strict"}:
+                    out["sameSite"] = ss
+
+            normalized.append(out)
+        return normalized
+
+    async def _scrape_with_playwright(self, url: str, max_items: int) -> List[XContent]:
+        try:
+            from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+        except Exception:
+            bt.logging.warning("playwright is not available in environment.")
+            return []
+
+        results: List[XContent] = []
+        seen_urls = set()
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context()
+
+                if os.path.exists("cookies.json"):
+                    try:
+                        with open("cookies.json", "r", encoding="utf-8") as f:
+                            raw = json.load(f)
+                        if isinstance(raw, dict) and isinstance(raw.get("cookies"), list):
+                            raw = raw["cookies"]
+                        cookies = self._normalize_cookie_editor_export(raw if isinstance(raw, list) else [])
+                        if cookies:
+                            await context.add_cookies(cookies)
+                            bt.logging.info(f"Loaded {len(cookies)} cookies into playwright context.")
+                        else:
+                            bt.logging.warning("cookies.json found but no valid cookies after normalization.")
+                    except Exception:
+                        bt.logging.warning(f"Failed to load cookies.json: {traceback.format_exc()}")
+
+                page = await context.new_page()
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=self.PLAYWRIGHT_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    await browser.close()
+                    return []
+
+                # Scroll a bit to load more tweets.
+                for _ in range(4):
+                    articles = await page.query_selector_all("article")
+                    for article in articles:
+                        x_content = await self._article_to_xcontent(article)
+                        if x_content is None:
+                            continue
+                        normalized_url = utils.normalize_url(x_content.url)
+                        if normalized_url in seen_urls:
+                            continue
+                        seen_urls.add(normalized_url)
+                        results.append(x_content)
+                        if len(results) >= max_items:
+                            break
+
+                    if len(results) >= max_items:
+                        break
+
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(1500)
+
+                await browser.close()
+        except Exception:
+            bt.logging.warning(
+                f"playwright scrape failed for {url}: {traceback.format_exc()}"
+            )
+            return []
+
+        return results
+
+    async def _article_to_xcontent(self, article: Any) -> Optional[XContent]:
+        try:
+            time_el = await article.query_selector("time")
+            timestamp = dt.datetime.now(dt.timezone.utc)
+            if time_el is not None:
+                datetime_attr = await time_el.get_attribute("datetime")
+                if datetime_attr:
+                    timestamp = dt.datetime.fromisoformat(datetime_attr.replace("Z", "+00:00"))
+
+            link_els = await article.query_selector_all('a[href*="/status/"]')
+            tweet_url = None
+            username = None
+            for link_el in link_els:
+                href = await link_el.get_attribute("href")
+                if not href or "/status/" not in href:
+                    continue
+                tweet_url = f"https://x.com{href}" if href.startswith("/") else href
+                pieces = href.split("/")
+                if len(pieces) > 1:
+                    username = pieces[1]
+                break
+
+            if not tweet_url:
+                return None
+
+            text_el = await article.query_selector('[data-testid="tweetText"]')
+            text = await text_el.inner_text() if text_el else ""
+            hashtags = re.findall(r"(#[A-Za-z0-9_]+)", text or "")
+
+            return XContent(
+                username=f"@{username}" if username else "@unknown",
+                text=utils.sanitize_scraped_tweet(text or ""),
+                url=tweet_url,
+                timestamp=timestamp,
+                tweet_hashtags=hashtags,
+                media=None,
+                # Required enriched fields (best-effort defaults for OD schema compatibility)
+                tweet_id=tweet_url.split("/status/")[-1].split("?")[0] if "/status/" in tweet_url else None,
+                is_reply=False,
+                is_quote=False,
+                language="en",
+                like_count=0,
+                retweet_count=0,
+                reply_count=0,
+                quote_count=0,
+                view_count=0,
+                bookmark_count=0,
+                user_id="",
+                user_display_name=username or "",
+                user_verified=False,
+                user_blue_verified=False,
+                user_followers_count=0,
+                user_following_count=0,
+                conversation_id=tweet_url.split("/status/")[-1].split("?")[0] if "/status/" in tweet_url else None,
+                scraped_at=dt.datetime.now(dt.timezone.utc),
+            )
+        except Exception:
+            return None
 
     def _best_effort_parse_dataset(
         self, dataset: List[dict], check_engagement: bool = True
