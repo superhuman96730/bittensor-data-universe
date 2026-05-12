@@ -1,74 +1,148 @@
 {
-    "scraper_configs": [
+  "global": {
+    "max_workers": 5,
+    "request_timeout": 10,
+    "retry_attempts": 3,
+    "retry_backoff": 2,
+    "deduplication": true,
+    "min_post_age_minutes": 1,
+    "max_post_age_hours": 24
+  },
+
+  "scraper_configs": [
+    {
+      "scraper_id": "X.apidojo",
+      "cadence_seconds": 300,
+      "labels_to_scrape": [
         {
-            "scraper_id": "X.apidojo",
-            "cadence_seconds": 300,
-            "labels_to_scrape": [
-                {
-                    "label_choices": [
-                        "#bitcoin",
-                        "#bitcoincharts",
-                        "#bitcoiner",
-                        "#bitcoinexchange",
-                        "#bitcoinmining",
-                        "#bitcoinnews",
-                        "#bitcoinprice",
-                        "#bitcointechnology",
-                        "#bitcointrading",
-                        "#bittensor",
-                        "#btc",
-                        "#cryptocurrency",
-                        "#crypto",
-                        "#defi",
-                        "#decentralizedfinance",
-                        "#tao"
-                    ],
-                    "max_data_entities": 75
-                }
-            ]
-        },
-        {
-            "scraper_id": "Reddit.json",
-            "cadence_seconds": 10,
-            "labels_to_scrape": [
-                {
-                    "label_choices": [
-                        "r/bittensor_",
-                        "r/bitcoin",
-                        "r/BitcoinCash",
-                        "r/Bittensor_",
-                        "r/Btc",
-                        "r/Cryptocurrency",
-                        "r/Cryptomarkets",
-                        "r/EthereumClassic",
-                        "r/Ethtrader",
-                        "r/Filecoin",
-                        "r/Monero",
-                        "r/Polkadot",
-                        "r/Solana",
-                        "r/WallstreetBets"
-                    ],
-                    "max_data_entities": 100
-                }
-            ]
-        },
-        {
-            "scraper_id": "YouTube.custom.transcript",
-            "cadence_seconds": 100,
-            "labels_to_scrape": [
-                {
-                    "label_choices": [
-                        "#ytc_c_UCAuUUnT6oDeKwE6v1NGQxug",
-                        "#ytc_c_UCYO_jab_esuFRV4b17AJtAw",
-                        "#ytc_c_UCsXVk37bltHxD1rDPwtNM8Q",
-                        "#ytc_c_UCSHZKyawb77ixDdsGog4iWA",
-                        "#ytc_c_UCR93yACeNzxMSk6Y1cHM2pA",
-                        "#ytc_c_UCbLhGKVY-bJPcawebgtNfbw"
-                    ],
-                    "max_data_entities": 50,
-                     "max_age_hint_minutes": 43200
-                }
-            ]
+          "label_choices": [
+            "#bitcoin",
+            "#bitcoincharts",
+            "#bitcoiner",
+            "#bitcoinexchange",
+            "#bitcoinmining",
+            "#bitcoinnews",
+            "#bitcoinprice",
+            "#bitcointechnology",
+            "#bitcointrading",
+            "#bittensor",
+            "#btc",
+            "#cryptocurrency",
+            "#crypto",
+            "#defi",
+            "#decentralizedfinance",
+            "#tao",
+            "#Iran",  
+            "#Israel",
+            "#Trump"
+          ],
+          "max_age_hint_minutes": 1440,
+          "max_data_entities": 75
         }
-    ]
+      ]
+    },
+    {
+      "scraper_id": "Reddit.json",
+      "enabled": true,
+      "cadence_seconds": 60,
+      "max_data_entities": 100,
+
+      "labels_to_scrape": [
+        {
+          "label_choices": [
+            "machinelearning",
+            "artificial",
+            "datascience"
+          ],
+          "weight": 1.0
+        },
+        {
+          "label_choices": [
+            "programming",
+            "Iran",
+            "Israel",
+            "technology"
+          ],
+          "weight": 0.8
+        },
+        {
+          "label_choices": [
+            "AI",
+            "ChatGPT",
+            "Bitcoin",
+            "Ethereum",
+            "OpenAI",
+            "NVIDIA",
+            "Apple",
+            "Tesla",
+            "Microsoft"
+          ],
+          "weight": 0.8
+        },
+        {
+          "label_choices": [
+            "GPT-5",
+            "AI agent",
+            "crypto ETF",
+            "halving",
+            "stable diffusion",
+            "LLM benchmark"
+          ],
+          "weight": 0.8
+        },
+        {
+          "label_choices": [
+            "python tutorial",
+            "machine learning project",
+            "react tutorial",
+            "docker deployment"
+          ],
+          "weight": 0.8
+        },
+        {
+          "label_choices": [
+            "cryptocurrency",
+            "bitcoin",
+            "ethtrader"
+          ],
+          "weight": 1.0
+        }
+      ],
+
+      "rate_limit": {
+        "requests_per_minute": 30,
+        "min_interval_seconds": 2,
+        "max_interval_seconds": 5,
+        "jitter": true
+      },
+
+      "pagination": {
+        "limit_per_request": 25,
+        "max_pages_per_cycle": 2
+      },
+
+      "fetch_mode": "new",
+
+      "filters": {
+        "max_post_age_hours": 72,
+        "max_age_hint_minutes": 120,
+        "min_text_length": 5,
+        "remove_duplicates": true
+      }
+    }
+  ],
+
+  "validation": {
+    "require_text": true,
+    "min_text_length": 5,
+    "remove_duplicates": true,
+    "remove_nsfw": true,
+    "remove_media_only": true
+  },
+
+  "scoring": {
+    "freshness_weight": 1.0,
+    "keyword_match_boost": 1.5,
+    "uniqueness_weight": 2.0
+  }
 }
