@@ -61,7 +61,7 @@ class MinerEvaluator:
         DataSource.REDDIT: ScraperId.REDDIT_MC,
     }
 
-    def __init__(self, config: bt.config, uid: int, metagraph_syncer: MetagraphSyncer, s3_reader: ValidatorS3Access):
+    def __init__(self, config: bt.Config, uid: int, metagraph_syncer: MetagraphSyncer, s3_reader: ValidatorS3Access):
         self.config = config
         self.uid = uid
         self.metagraph_syncer = metagraph_syncer
@@ -70,7 +70,7 @@ class MinerEvaluator:
             self._on_metagraph_updated, netuids=[config.netuid]
         )
         self.vpermit_rao_limit = self.config.vpermit_rao_limit
-        self.wallet = bt.wallet(config=self.config)
+        self.wallet = bt.Wallet(config=self.config)
 
         # Set up initial scoring weights for validation
         self.scorer = MinerScorer(self.metagraph.n, DataValueCalculator())
@@ -740,7 +740,7 @@ class MinerEvaluator:
             )
             return None
 
-    def _on_metagraph_updated(self, metagraph: bt.metagraph, netuid: int):
+    def _on_metagraph_updated(self, metagraph: bt.Metagraph, netuid: int):
         """Handles an update to a metagraph."""
         bt.logging.info(
             f"Evaluator processing an update to metagraph on subnet {netuid}."
