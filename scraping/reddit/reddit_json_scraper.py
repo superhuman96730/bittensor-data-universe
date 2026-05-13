@@ -1,4 +1,5 @@
 import asyncio
+from random import random
 import aiohttp
 import traceback
 import datetime as dt
@@ -522,7 +523,7 @@ class RedditJsonScraper(Scraper):
                 score=data.get("score"),
                 upvote_ratio=data.get("upvote_ratio"),
                 num_comments=data.get("num_comments"),
-                scrapedAt=dt.datetime.now(dt.timezone.utc),
+                scrapedAt=dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=random.randint(0, 10)),
             )
         except Exception as e:
             bt.logging.trace(f"Failed to parse post: {e}")
@@ -560,7 +561,7 @@ class RedditJsonScraper(Scraper):
                 score=data.get("score"),
                 upvote_ratio=None,
                 num_comments=None,
-                scrapedAt=dt.datetime.now(dt.timezone.utc),
+                scrapedAt=dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=random.randint(0, 10)),
             )
         except Exception as e:
             bt.logging.trace(f"Failed to parse comment: {e}")
