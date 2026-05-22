@@ -1,4 +1,5 @@
 import asyncio
+import random
 import aiohttp
 import traceback
 import datetime as dt
@@ -139,6 +140,13 @@ class RedditJsonScraper(Scraper):
                     if content:
                         contents.append(content)
 
+
+                # for post_data in posts:
+                #     content = self._parse_post(post_data)
+                #     contentLst = await self._fetch_content_from_PostUrl(session, content.url, content.data_type) if content else None
+                #     for content in contentLst:
+                #         if content:
+                #             contents.append(content)
         except Exception as e:
             bt.logging.error(
                 f"Failed to scrape reddit using subreddit {subreddit_name}: {traceback.format_exc()}."
@@ -209,7 +217,7 @@ class RedditJsonScraper(Scraper):
 
         try:
             async with aiohttp.ClientSession(headers={"User-Agent": self.USER_AGENT}) as session:
-
+                filtered_contents = []
                 # Case 1: Search by usernames
                 if usernames:
                     bt.logging.warning(f"----------mode usernames filtering")
@@ -286,73 +294,107 @@ class RedditJsonScraper(Scraper):
                         url = f"{self.BASE_URL}/new.json?limit=100&raw_json=1"
                     bt.logging.warning(f"---------- {url}")
                     posts = await self._fetch_posts(session, url)
-                    if len(posts) != 0:
-                        after = posts[-1]["data"]["name"]
-                    for post_data in posts:
-                        # Check if it's a post or comment based on kind
-                        kind = post_data.get("kind", "")
-                        if kind == "t3":  # Post
-                            content = self._parse_post(post_data)
-                        elif kind == "t1":  # Comment
-                            content = self._parse_comment(post_data)
-                        else:
-                            content = self._parse_post(post_data)  # Default to post parsing
-
-                        contentsAll.append(content)
-                        if content and self._matches_criteria(content, keywords, keyword_mode, start_datetime, end_datetime):
-                            contents.append(content)
-
-                # Filter out NSFW content with media
-                filtered_contents = []
-                for content in contents:
-                    if content.is_nsfw and content.media:
-                        bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
-                        continue
-                    filtered_contents.append(content)
-
-                if len(filtered_contents) < limit and len(contentsAll) > 0 and after is not None:
-                    flag = True
-                    while flag:
-                        
-                        nextUrl = url + "&after=" + after if after else url
-                        bt.logging.warning(f"----------next page filtering: + {nextUrl}")
-                        bt.logging.warning(f"----------len(filtered_contents) : + {len(filtered_contents)}")
-                        posts = await self._fetch_posts(session, nextUrl)
-                        if not posts:
-                            break
-                        
-                        for post in posts:
-                            
-                            kind = post.get("kind", "")
-                            if kind == "t3":  # Post
-                                content = self._parse_post(post)
-                            elif kind == "t1":  # Comment
-                                content = self._parse_comment(post)
-                            else:
-                                content = self._parse_post(post)  # Default to post parsing
-
-                            if content is None:
-                                continue
-                            
-                            t = content.created_at
-                            # bt.logging.warning(f"----------next page filtering---t: + {t}")
-                            # bt.logging.warning(f"----------next page filtering---start_datetime: + {start_datetime}")
-                            # cutoff condition
-                            if t < start_datetime:
-                                flag = False
+                    if len(posts) == 0:
+                        bt.logging.warning(f"No posts found for the given criteria, returning empty list")
+                        return []
+                    
+                    after = posts[-1]["data"]["name"]
+                    last_created_at = self._parse_post(posts[-1]).created_at
+                    if end_datetime and last_created_at and last_created_at > end_datetime:
+                        bt.logging.warning(f"Last post created at {last_created_at} is newer than end_datetime {end_datetime}, skipping keyword filtering and using all posts")
+                    else:
+                        flag = True
+                        for post_data in posts:
+                            if flag == False:
                                 break
-                            
-                            if start_datetime <= t <= end_datetime:
+                            # Check if it's a post or comment based on kind
+                            kind = post_data.get("kind", "")
+                            if kind == "t3":  # Post
+                                content = self._parse_post(post_data)
+                            elif kind == "t1":  # Comment
+                                content = self._parse_comment(post_data)
+                            else:
+                                content = self._parse_post(post_data)  # Default to post parsing
+
+                            # contentsAll.append(content)
+                            if content and self._matches_criteria(content, keywords, keyword_mode, start_datetime, end_datetime):
                                 if content.is_nsfw and content.media:
                                     bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
                                     continue
-                                filtered_contents.append(content)
 
-                            if len(filtered_contents) >= limit:
-                                flag = False
-                                break
+                                contentLst = await self._fetch_content_from_PostUrl(session, content.url, content.data_type) if content else None
+                                for content in contentLst:
+                                    t = content.created_at
+                                    if content and (start_datetime <= t and t <= end_datetime):
+                                        # contents.append(content)
+                                        if content.is_nsfw and content.media:
+                                            bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                                            continue
 
-                        # pagination
+                                        filtered_contents.append(content)
+                                        if len(filtered_contents) >= limit:
+                                            flag = False
+                                            break
+
+                # Filter out NSFW content with media                
+                # for content in contents:
+                #     if content.is_nsfw and content.media:
+                #         bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                #         continue
+                #     filtered_contents.append(content)
+                    
+
+                if len(filtered_contents) < limit:
+                    flag = True
+                    while flag and (after is not None):
+                        
+                        nextUrl = url + "&after=" + after if after else url
+                        bt.logging.warning(f"----------next page filtering: + {nextUrl}")
+                        bt.logging.warning(f"----------len(filtered_contents) : {len(filtered_contents)}, limit : {limit}")
+                        posts = await self._fetch_posts(session, nextUrl)
+
+                        if len(posts) == 0:
+                            bt.logging.warning(f"----------No more posts found at {nextUrl}, stopping pagination")
+                            return []
+                    
+                        last_created_at = self._parse_post(posts[-1]).created_at
+                        if end_datetime and last_created_at and last_created_at > end_datetime:
+                            bt.logging.warning(f"Last post created at {last_created_at} is newer than end_datetime {end_datetime}, skipping keyword filtering and using all posts")
+                        else:
+                            for post in posts:
+                                if flag == False:
+                                    break
+
+                                kind = post.get("kind", "")
+                                if kind == "t3":  # Post
+                                    content = self._parse_post(post)
+                                elif kind == "t1":  # Comment
+                                    content = self._parse_comment(post)
+                                else:
+                                    content = self._parse_post(post)  # Default to post parsing
+
+                                if content is None:
+                                    continue
+                                
+                                t = content.created_at
+                                # cutoff condition
+                                if t < start_datetime:
+                                    flag = False
+                                    break
+                                
+                                contentLst = await self._fetch_content_from_PostUrl(session, content.url, content.data_type) if content else None
+                                for content in contentLst:
+                                    t = content.created_at
+                                    if content and (start_datetime <= t and t <= end_datetime):
+                                        # contents.append(content)
+                                        if content.is_nsfw and content.media:
+                                            bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                                            continue
+                                        filtered_contents.append(content)
+                                        if len(filtered_contents) >= limit:
+                                            flag = False
+                                            break
+
                         after = posts[-1]["data"]["name"]
 
                 # if len(filtered_contents) == 0 and len(contentsAll) > 0:
@@ -362,7 +404,7 @@ class RedditJsonScraper(Scraper):
 
                 bt.logging.success(
                     f"On-demand scrape completed. Found {len(filtered_contents)} items "
-                    f"(filtered out {len(contents) - len(filtered_contents)} NSFW+media posts)."
+                    # f"(filtered out {len(contents) - len(filtered_contents)} NSFW+media posts)."
                 )
 
                 # Convert to DataEntity objects
@@ -426,6 +468,77 @@ class RedditJsonScraper(Scraper):
 
         return []
 
+    async def _fetch_content_from_PostUrl(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        data_type: RedditDataType
+    ) -> Optional[RedditContent]:
+        """
+        Fetch and parse a specific post or comment from its URL.
+        """
+        for attempt in range(self.MAX_RETRIES):
+            # Normalize URL: remove .json if present, remove existing query params
+            clean_url = url
+            if clean_url.rstrip('/').endswith('.json'):
+                clean_url = clean_url.rstrip('/')[:-5] + '/'
+            if '?' in clean_url:
+                clean_url = clean_url.split('?')[0]
+
+            # Add .json and raw_json=1 parameter
+            # raw_json=1 returns unescaped text (e.g., ">" instead of "&gt;") to match PRAW output
+            # Reddit accepts /.json format (e.g., /comments/abc/.json)
+            json_url = f"{clean_url}.json?depth=2&raw_json=1"
+            # bt.logging.warning(f"----------fetch content from {json_url}")
+            try:
+                async with session.get(json_url, timeout=self.REQUEST_TIMEOUT) as response:
+                    if response.status == 429:
+                        # Rate limited, wait and retry
+                        retry_after = int(response.headers.get("Retry-After", self.RETRY_DELAY))
+                        bt.logging.warning(f"Rate limited, waiting {retry_after}s before retry...")
+                        await asyncio.sleep(retry_after)
+                        continue
+                    
+                    if response.status != 200:
+                        if attempt < self.MAX_RETRIES - 1:
+                            await asyncio.sleep(self.RETRY_DELAY)
+                            continue
+                        return []
+
+                    data = await response.json()
+                    result = []
+                    # if data_type == RedditDataType.POST:
+                    # For posts, data is a list where [0] contains the post
+                    if isinstance(data, list) and len(data) > 0:
+                        children = data[0].get("data", {}).get("children", [])
+                        for child in children:
+                            result.append(self._parse_post(child))
+                    # elif data_type == RedditDataType.COMMENT:
+                    # For comments, we need to navigate to find the specific comment
+                    # data[0] contains the parent post, data[1] contains comments
+                    if isinstance(data, list) and len(data) > 1:
+                        # Get parent post's NSFW status (comments inherit from parent)
+                        parent_post_data = data[0].get("data", {}).get("children", [{}])[0].get("data", {})
+                        parent_nsfw = parent_post_data.get("over_18", False)
+
+                        children = data[1].get("data", {}).get("children", [])
+                        for child in children:
+                            result.append(self._parse_comment(child, parent_nsfw=parent_nsfw))
+                    # print(f"----------fetch content from {json_url} result: {result}")
+                    return result
+            except asyncio.TimeoutError:
+                bt.logging.warning(f"Timeout fetching {url}, attempt {attempt + 1}/{self.MAX_RETRIES}")
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAY)
+                    continue
+            except Exception as e:
+                bt.logging.error(f"Error fetching content from {url}: {e}")
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAY)
+                    continue
+
+        return []
+    
     async def _fetch_content_from_url(
         self,
         session: aiohttp.ClientSession,
