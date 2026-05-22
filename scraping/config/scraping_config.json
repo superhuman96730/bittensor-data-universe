@@ -5,14 +5,14 @@
     "retry_attempts": 3,
     "retry_backoff": 2,
     "deduplication": true,
-    "min_post_age_minutes": 1,
-    "max_post_age_hours": 24
+    "min_post_age_minutes": 10,
+    "max_age_hours": 24
   },
 
   "scraper_configs": [
     {
       "scraper_id": "X.apidojo",
-      "cadence_seconds": 300,
+      "cadence_seconds": 200,
       "labels_to_scrape": [
         {
           "label_choices": [
@@ -44,8 +44,13 @@
     {
       "scraper_id": "Reddit.json",
       "enabled": true,
-      "cadence_seconds": 60,
+      "cadence_seconds": 150,
       "max_data_entities": 100,
+      "fetch_mode": "new",
+      "max_age_hours": 72,
+      "max_age_hint_minutes": 1440,
+      "min_text_length": 20,
+      "remove_duplicates": true,
 
       "labels_to_scrape": [
         {
@@ -82,20 +87,7 @@
         {
           "label_choices": [
             "GPT-5",
-            "AI agent",
-            "crypto ETF",
-            "halving",
-            "stable diffusion",
-            "LLM benchmark"
-          ],
-          "weight": 0.8
-        },
-        {
-          "label_choices": [
-            "python tutorial",
-            "machine learning project",
-            "react tutorial",
-            "docker deployment"
+            "AIAgent"
           ],
           "weight": 0.8
         },
@@ -119,15 +111,6 @@
       "pagination": {
         "limit_per_request": 25,
         "max_pages_per_cycle": 2
-      },
-
-      "fetch_mode": "new",
-
-      "filters": {
-        "max_post_age_hours": 72,
-        "max_age_hint_minutes": 120,
-        "min_text_length": 5,
-        "remove_duplicates": true
       }
     }
   ],

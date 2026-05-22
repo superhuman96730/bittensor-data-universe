@@ -170,7 +170,11 @@ class SqliteMinerStorage(MinerStorage):
                 label = (
                     "NULL" if (data_entity.label is None) else data_entity.label.value
                 )
-                time_bucket_id = TimeBucket.from_datetime(data_entity.datetime).id
+
+                try:
+                    time_bucket_id = TimeBucket.from_datetime(data_entity.datetime).id
+                except Exception:
+                    continue
                 values.append(
                     [
                         data_entity.uri,
