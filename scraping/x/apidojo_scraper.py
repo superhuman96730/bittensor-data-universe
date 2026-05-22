@@ -382,10 +382,11 @@ class ApiDojoTwitterScraper(Scraper):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 context = await browser.new_context()
-
-                if os.path.exists("cookies.json"):
+                cookies_path = os.getenv("COOKIES_PATH")
+                bt.logging.info(f"Playwright context initialized. Cookies path: {cookies_path}")
+                if os.path.exists(cookies_path):
                     try:
-                        with open("cookies.json", "r", encoding="utf-8") as f:
+                        with open(cookies_path, "r", encoding="utf-8") as f:
                             raw = json.load(f)
                         if isinstance(raw, dict) and isinstance(raw.get("cookies"), list):
                             raw = raw["cookies"]
@@ -394,9 +395,9 @@ class ApiDojoTwitterScraper(Scraper):
                             await context.add_cookies(cookies)
                             bt.logging.info(f"Loaded {len(cookies)} cookies into playwright context.")
                         else:
-                            bt.logging.warning("cookies.json found but no valid cookies after normalization.")
+                            bt.logging.warning("cookies file found but no valid cookies after normalization.")
                     except Exception:
-                        bt.logging.warning(f"Failed to load cookies.json: {traceback.format_exc()}")
+                        bt.logging.warning(f"Failed to load cookies: {traceback.format_exc()}")
 
                 page = await context.new_page()
                 try:
