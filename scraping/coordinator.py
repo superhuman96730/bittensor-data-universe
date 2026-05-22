@@ -85,6 +85,51 @@ def _choose_scrape_configs(
         if label_config.label_choices:
             labels_to_scrape = [random.choice(label_config.label_choices)]
 
+        # Additionally, load dynamic desirability labels (if any) and schedule a small number
+        # of extra scrapes for those labels to ensure the local archive contains desired labels.
+        # We filter by platform so Reddit scrapers only get subreddit labels (strip leading '#').
+        dynamic_labels_reddit = []
+        dynamic_labels_x = []
+        try:
+            # Look for dynamic_desirability/total.json up to 3 levels up
+            import os, json
+
+            current_dir = os.getcwd()
+            for _ in range(3):
+                total_json_path = os.path.join(current_dir, "dynamic_desirability", "total.json")
+                if os.path.exists(total_json_path):
+                    with open(total_json_path, 'r') as f:
+                        lookup = json.load(f)
+                        # Expecting a list of job dicts with params.label and params.platform
+                        if isinstance(lookup, list):
+                            bt.logging.info(f"Found dynamic desirability lookup with {len(lookup)} entries at {total_json_path}.")
+                            for item in lookup:
+                                if not isinstance(item, dict):
+                                    continue
+                                params = item.get('params', {}) or {}
+                                label_val = params.get('label')
+                                platform = (params.get('platform') or '').lower()
+                                if not label_val:
+                                    continue
+                                # Normalize and assign by platform
+                                if platform == 'reddit':
+                                    # subreddit names shouldn't include '#' or 'r/' prefix
+                                    norm = str(label_val).strip()
+                                    norm = norm.removeprefix('#').removeprefix('r/').strip()
+                                    if norm:
+                                        dynamic_labels_reddit.append(norm)
+                                elif platform in ('x', 'twitter'):
+                                    norm = str(label_val).strip()
+                                    # Ensure hashtag starts with '#'
+                                    if not norm.startswith('#'):
+                                        norm = '#' + norm
+                                    dynamic_labels_x.append(norm)
+                    break
+                current_dir = os.path.dirname(current_dir)
+        except Exception:
+            dynamic_labels_reddit = []
+            dynamic_labels_x = []
+
         # Get max age from config or use default
         max_age_minutes = label_config.max_age_hint_minutes
 
@@ -120,6 +165,39 @@ def _choose_scrape_configs(
                 labels=labels_to_scrape,
             )
         )
+
+        # Schedule additional scrapes for top dynamic labels (cap to 5 per label_config)
+        max_dynamic = 5
+        if scraper_id in (ScraperId.REDDIT_JSON, ScraperId.REDDIT_CUSTOM, ScraperId.REDDIT_MC):
+            if dynamic_labels_reddit:
+                selected = random.sample(
+                    dynamic_labels_reddit,
+                    min(len(dynamic_labels_reddit), max_dynamic)
+                )
+                bt.logging.info(f"Scheduled {min(len(selected), max_dynamic)} additional scrapes for dynamic labels: {selected}")
+                for dyn_label in selected:
+                    results.append(
+                        ScrapeConfig(
+                            entity_limit=min(label_config.max_data_entities or 100, 50),
+                            date_range=date_range,
+                            labels=[DataLabel(value=dyn_label)]
+                        )
+                    )
+        elif scraper_id in (ScraperId.X_APIDOJO, ScraperId.X_FLASH, ScraperId.X_MICROWORLDS, ScraperId.X_QUACKER):
+            if dynamic_labels_x:
+                selected = random.sample(
+                    dynamic_labels_x,
+                    min(len(dynamic_labels_x), max_dynamic)
+                )
+                bt.logging.info(f"Scheduled {min(len(selected), max_dynamic)} additional scrapes for dynamic labels: {selected}")
+                for dyn_label in selected:
+                    results.append(
+                        ScrapeConfig(
+                            entity_limit=min(label_config.max_data_entities or 100, 50),
+                            date_range=date_range,
+                            labels=[DataLabel(value=dyn_label)]
+                        )
+                    )
 
     return results
 
