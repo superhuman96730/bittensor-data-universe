@@ -318,30 +318,30 @@ class RedditJsonScraper(Scraper):
 
                             # contentsAll.append(content)
                             if content and self._matches_criteria(content, keywords, keyword_mode, start_datetime, end_datetime):
-                                if content.is_nsfw and content.media:
-                                    bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
-                                    continue
-
-                                contentLst = await self._fetch_content_from_PostUrl(session, content.url, content.data_type) if content else None
-                                for content in contentLst:
-                                    t = content.created_at
-                                    if content and (start_datetime <= t and t <= end_datetime):
-                                        # contents.append(content)
-                                        if content.is_nsfw and content.media:
-                                            bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
-                                            continue
-
-                                        filtered_contents.append(content)
-                                        if len(filtered_contents) >= limit:
-                                            flag = False
-                                            break
+                                # if content.is_nsfw and content.media:
+                                #     bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                                #     continue
+                                contents.append(content)
+                                # contentLst = await self._fetch_content_from_PostUrl(session, content.url, content.data_type) if content else None
+                                # for content in contentLst:
+                                #     t = content.created_at
+                                #     if content and (start_datetime <= t and t <= end_datetime):
+                                #         # contents.append(content)
+                                #         if content.is_nsfw and content.media:
+                                #             bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                                #             continue
+                                        
+                                #         filtered_contents.append(content)
+                                #         if len(filtered_contents) >= limit:
+                                #             flag = False
+                                #             break
 
                 # Filter out NSFW content with media                
-                # for content in contents:
-                #     if content.is_nsfw and content.media:
-                #         bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
-                #         continue
-                #     filtered_contents.append(content)
+                for content in contents:
+                    if content.is_nsfw and content.media:
+                        bt.logging.trace(f"Skipping NSFW content with media: {content.url}")
+                        continue
+                    filtered_contents.append(content)
                     
 
                 if len(filtered_contents) < limit:

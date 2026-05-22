@@ -833,9 +833,18 @@ class Miner:
                     synapse.data = []
                     return synapse
 
+                subreddit = None
+
+                if hasattr(synapse, "labels"):
+                    if synapse.labels:
+                        first = synapse.labels[0]
+
+                        if hasattr(first, "value"):
+                            subreddit = first.value
+
                 data = await scraper.on_demand_scrape(
                     usernames=synapse.usernames,
-                    subreddit=synapse.subreddit,
+                    subreddit=subreddit,
                     keywords=synapse.keywords,
                     keyword_mode=synapse.keyword_mode,
                     start_datetime=start_dt,
