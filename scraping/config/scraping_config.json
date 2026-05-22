@@ -1,6 +1,6 @@
 {
   "global": {
-    "max_workers": 5,
+    "max_workers": 3,
     "request_timeout": 10,
     "retry_attempts": 3,
     "retry_backoff": 2,

@@ -760,6 +760,7 @@ class Miner:
 
         try:
             # Create date range with utility function
+            start_time = time.perf_counter()
             start_dt = (
                 utils.parse_iso_date(synapse.start_date)
                 if synapse.start_date
@@ -854,9 +855,11 @@ class Miner:
                 synapse.data = data[: synapse.limit] if synapse.limit else data
 
             synapse.version = constants.PROTOCOL_VERSION
-
+            end_time = time.perf_counter()
+            elapsed = end_time - start_time
+            
             bt.logging.success(
-                f"Returning {len(synapse.data)} items to {synapse.dendrite.hotkey}"
+                f"Returning {len(synapse.data)} items to {synapse.dendrite.hotkey} in {elapsed:.2f} seconds"
             )
 
         except Exception as e:
