@@ -19,6 +19,7 @@ mydb
 *.so
 
 # Distribution / packaging
+./scraping/cookies/
 .Python
 build/
 develop-eggs/
